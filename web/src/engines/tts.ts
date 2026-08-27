@@ -21,13 +21,43 @@ export interface WebSpeakOutcome {
  */
 export class WebSpeechSynthesizer {
   private voices: SpeechSynthesisVoice[] = [];
+  private unlocked = false;
+
+  /**
+   * Android Chrome refuses `speak()` unless speech synthesis has been started
+   * from a user gesture at least once, and it refuses silently — no error, no
+   * audio, no events. Our translation arrives after an await, so by the time
+   * we auto-speak the gesture is long gone.
+   *
+   * Speaking one empty utterance from inside the tap that starts a translation
+   * lifts the restriction for the rest of the session. Call it from a real
+   * event handler, synchronously, before any awaits.
+   */
+  unlock(): void {
+    if (this.unlocked || !('speechSynthesis' in globalThis)) return;
+    this.unlocked = true;
+    try {
+      const u = new SpeechSynthesisUtterance('');
+      u.volume = 0;
+      speechSynthesis.speak(u);
+      speechSynthesis.cancel();
+    } catch {
+      /* nothing to recover from; the real speak() will report any problem */
+    }
+  }
 
   /**
    * Voice lists populate asynchronously, and Chrome in particular returns an
    * empty array on the first call. Wait for `voiceschanged`, with a timeout so
    * a browser that never fires it doesn't hang the setup screen.
    */
-  async initialize(timeoutMs = 3000): Promise<void> {
+  /**
+   * Android populates the voice list late and sometimes without ever firing
+   * `voiceschanged`, so wait for the event but also poll, and give it longer
+   * than feels necessary. An empty list here reads as "no TTS on this device",
+   * which is a discouraging and usually wrong thing to tell someone.
+   */
+  async initialize(timeoutMs = 6000): Promise<void> {
     if (!('speechSynthesis' in globalThis)) {
       throw new Error('This browser has no speech synthesis support.');
     }
@@ -39,13 +69,17 @@ export class WebSpeechSynthesizer {
     }
 
     await new Promise<void>((resolve) => {
-      const done = () => {
-        speechSynthesis.removeEventListener('voiceschanged', done);
+      const finish = () => {
+        speechSynthesis.removeEventListener('voiceschanged', finish);
+        clearInterval(poll);
         clearTimeout(timer);
         resolve();
       };
-      const timer = setTimeout(done, timeoutMs);
-      speechSynthesis.addEventListener('voiceschanged', done);
+      const poll = setInterval(() => {
+        if (speechSynthesis.getVoices().length > 0) finish();
+      }, 250);
+      const timer = setTimeout(finish, timeoutMs);
+      speechSynthesis.addEventListener('voiceschanged', finish);
     });
 
     this.voices = speechSynthesis.getVoices();
@@ -63,30 +97,50 @@ export class WebSpeechSynthesizer {
     }));
   }
 
+  /**
+   * `localService` is a preference here, not a filter.
+   *
+   * It was a filter, and that was wrong: Android Chrome reports
+   * `localService: false` for every voice it exposes, including ones the
+   * Android TTS engine synthesises entirely on-device. Trusting it there means
+   * rejecting every voice on the phone and never speaking at all — a worse
+   * outcome than trying a voice that might turn out to need the network.
+   *
+   * So: prefer a voice that claims to be local, fall back to any voice for the
+   * language, and let the Airplane Mode test settle the question empirically.
+   * That was always the plan for iOS, which exposes no such flag either.
+   */
   pickOfflineVoice(lang: Lang): SpeechSynthesisVoice | null {
     const prefix = lang === 'ru' ? 'ru' : 'en';
     const matching = this.voices.filter((v) => (v.lang ?? '').toLowerCase().startsWith(prefix));
-    const local = matching.filter((v) => v.localService);
-    if (local.length === 0) return null;
+    if (matching.length === 0) return null;
 
-    const exact = local.filter((v) => (v.lang ?? '').toLowerCase().replace('_', '-') === LOCALE[lang].toLowerCase());
-    const pool = exact.length > 0 ? exact : local;
-    const preferred = pool.find((v) => v.default);
-    return preferred ?? pool[0];
+    const rank = (v: SpeechSynthesisVoice) => {
+      const exact =
+        (v.lang ?? '').toLowerCase().replace('_', '-') === LOCALE[lang].toLowerCase() ? 2 : 0;
+      return (v.localService ? 4 : 0) + exact + (v.default ? 1 : 0);
+    };
+    return [...matching].sort((a, b) => rank(b) - rank(a))[0] ?? null;
+  }
+
+  /** True when the chosen voice claims to be device-local. Advisory only. */
+  isVoiceClaimedLocal(lang: Lang): boolean {
+    return this.pickOfflineVoice(lang)?.localService === true;
   }
 
   diagnose(lang: Lang): string | null {
     const prefix = lang === 'ru' ? 'ru' : 'en';
     const matching = this.voices.filter((v) => (v.lang ?? '').toLowerCase().startsWith(prefix));
     if (this.voices.length === 0) {
-      return 'The browser reported no voices at all. On Android this sometimes means no TTS engine is installed.';
+      return 'The browser reported no voices at all. On Android, install or enable a text-to-speech engine under Settings → System → Languages & input → Text-to-speech output.';
     }
     if (matching.length === 0) {
-      return `No ${prefix} voice on this device. On iOS add one under Settings → Accessibility → Spoken Content → Voices.`;
+      return prefix === 'ru'
+        ? 'No Russian voice on this device. On Android install Russian under Settings → System → Languages & input → Text-to-speech output → your engine → Install voice data. On iOS use Settings → Accessibility → Spoken Content → Voices.'
+        : 'No English voice on this device.';
     }
-    if (matching.every((v) => !v.localService)) {
-      return `Found ${matching.length} ${prefix} voice(s), but all are remote (localService=false) and will not work offline.`;
-    }
+    // Voices exist, so we will try them. Whether they truly work offline is
+    // decided by the Airplane Mode test, not by a flag.
     return null;
   }
 

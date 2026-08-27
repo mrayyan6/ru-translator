@@ -67,6 +67,35 @@ export function setOfflineMode(offline: boolean) {
   if (loadedEnv) loadedEnv.allowRemoteModels = allowRemote;
 }
 
+export function isOfflineModeArmed() {
+  return !allowRemote;
+}
+
+/**
+ * Run an explicitly user-initiated download with remote access enabled, then
+ * restore whatever the previous state was.
+ *
+ * Offline mode used to be armed once and left on, which meant any later model
+ * load — pressing "Load Whisper" in diagnostics, switching direction, adding a
+ * second language — died with "both local and remote models are disabled".
+ * `allowLocalModels` is false in a browser by definition, so arming offline
+ * mode globally disables *all* loading, not just network loading.
+ *
+ * Downloading is a setup activity and is always something the user asked for.
+ * What must never happen is a silent fetch during use, and that is preserved:
+ * outside this wrapper remote loading stays off, so a missing model still
+ * fails loudly instead of quietly reaching for the network.
+ */
+export async function withDownloadsAllowed<T>(work: () => Promise<T>): Promise<T> {
+  const wasArmed = !allowRemote;
+  setOfflineMode(false);
+  try {
+    return await work();
+  } finally {
+    setOfflineMode(wasArmed);
+  }
+}
+
 export function transformersDiagnostics() {
   return {
     libraryLoaded: loadedEnv !== null,

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import type { Lang } from '@core/types';
 import { mt, recorder, tts, whisper } from './engines/singletons';
-import { setOfflineMode } from './transformersEnv';
+import { setOfflineMode, withDownloadsAllowed } from './transformersEnv';
 import { MAX_RECORDING_MS } from './audio';
 import {
   getLastWarmUpMs,
@@ -48,6 +48,7 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState<string | null>(null);
   const [turn, setTurn] = useState<Turn | null>(null);
+  const [speakError, setSpeakError] = useState<string | null>(null);
   const [typed, setTyped] = useState('');
   const [elapsed, setElapsed] = useState(0);
 
@@ -71,7 +72,9 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
     (async () => {
       try {
         // Stage 1 — the active direction only. Enough to type and translate.
-        await mt.load(from, to, (p) => !cancelled && setMtProgress(p.progress));
+        await withDownloadsAllowed(() =>
+          mt.load(from, to, (p) => !cancelled && setMtProgress(p.progress))
+        );
         if (cancelled) return;
         setMtProgress(null);
         setMtReady(true);
@@ -81,7 +84,9 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
         // Stage 2 — speech, in the background. The screen is already usable.
         const device = getSttDevice();
         const variant = getSttVariant();
-        await whisper.load(variant, device, (p) => !cancelled && setSttProgress(p.progress));
+        await withDownloadsAllowed(() =>
+          whisper.load(variant, device, (p) => !cancelled && setSttProgress(p.progress))
+        );
         if (cancelled) return;
         setSttProgress(null);
         setSttReady(true);
@@ -149,10 +154,14 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
           ms: performance.now() - started,
         });
         setPhase('ready');
+        setSpeakError(null);
 
         if (outputMode === 'voice') {
+          // Kept apart from `error`: a failure to speak must not hide the
+          // translation. The text is the thing you can still hold up to
+          // someone; the audio is a convenience on top of it.
           tts.speak(forward.text, to).catch((e: any) =>
-            setError(`Could not speak it: ${e?.message ?? e}`)
+            setSpeakError(`Couldn't speak it — ${e?.message ?? e}`)
           );
         }
       } catch (e: any) {
@@ -203,7 +212,12 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
   }, [from, translateText]);
 
   const replay = useCallback(() => {
-    if (turn) tts.speak(turn.translation, turn.to).catch(() => undefined);
+    if (!turn) return;
+    tts.unlock();
+    setSpeakError(null);
+    tts.speak(turn.translation, turn.to).catch((e: any) =>
+      setSpeakError(`Couldn't speak it — ${e?.message ?? e}`)
+    );
   }, [turn]);
 
   /**
@@ -216,12 +230,10 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
    */
   const ensureDirection = useCallback(async (f: Lang, t: Lang) => {
     if (mt.isLoaded(f, t)) return;
-    setOfflineMode(false);
     try {
-      await mt.load(f, t, (p) => setMtProgress(p.progress));
+      await withDownloadsAllowed(() => mt.load(f, t, (p) => setMtProgress(p.progress)));
     } finally {
       setMtProgress(null);
-      setOfflineMode(true);
     }
   }, []);
 
@@ -411,6 +423,7 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
                   {turn.backTranslation}
                 </p>
               )}
+              {speakError && <p className="t-speak-error">{speakError}</p>}
               <div className="t-result-actions">
                 <motion.button
                   className="t-speak"
@@ -494,6 +507,9 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
               // removes the pointerleave hack that fired stop twice.
               onPointerDown={(e) => {
                 e.currentTarget.setPointerCapture(e.pointerId);
+                // Synchronously, inside the gesture — Android will not let us
+                // speak later otherwise.
+                tts.unlock();
                 void startRecording();
               }}
               onPointerUp={() => void stopAndTranslate()}
@@ -541,7 +557,10 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
             <motion.button
               className="t-translate"
               disabled={!mtReady || typed.trim() === ''}
-              onClick={() => void translateText(typed)}
+              onClick={() => {
+                tts.unlock();
+                void translateText(typed);
+              }}
               whileTap={reduce ? undefined : { scale: 0.97 }}
             >
               {mtReady ? 'Translate' : 'Loading translation…'}

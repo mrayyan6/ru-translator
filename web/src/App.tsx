@@ -23,7 +23,12 @@ import { forceUpdate } from './updateApp';
 import { buildLabelLong } from './buildInfo';
 import { clearPartials, partialBytes } from './resumableFetch';
 import { formatBytes, getStorageStatus, requestPersistentStorage, type StorageStatus } from './storage';
-import { detectWebGpu, setOfflineMode, transformersDiagnostics } from './transformersEnv';
+import {
+  detectWebGpu,
+  setOfflineMode,
+  transformersDiagnostics,
+  withDownloadsAllowed,
+} from './transformersEnv';
 
 const APP_VERSION = 'web-spike-0.1.0';
 
@@ -165,8 +170,7 @@ export default function App() {
     });
 
   const downloadModels = () =>
-    guard('Download models', async () => {
-      setOfflineMode(false);
+    guard('Download models', () => withDownloadsAllowed(async () => {
       say('Downloading translation models…');
       for (const [from, to] of [
         ['en', 'ru'],
@@ -199,7 +203,7 @@ export default function App() {
 
       await refreshEnvironment();
       say(`Model cache now holds ${formatBytes(await cachedBytes())}.`);
-    });
+    }));
 
   const armOffline = () =>
     guard('Arm offline mode', async () => {
@@ -210,11 +214,10 @@ export default function App() {
   const loadWhisper = () =>
     guard('Load Whisper', async () => {
       const dev = getSttDevice();
-      const load = await whisper.load(
-        variant,
-        dev,
-        (p) => setProgress(`whisper ${Math.round(p.progress)}%`),
-        say
+      // Wrapped so this works even after the translator screen has armed
+      // offline mode — pressing this button is an explicit request to load.
+      const load = await withDownloadsAllowed(() =>
+        whisper.load(variant, dev, (p) => setProgress(`whisper ${Math.round(p.progress)}%`), say)
       );
       const diag = transformersDiagnostics();
 

@@ -259,6 +259,12 @@ code.log { font-size: 11px; }
   flex-direction: column;
   gap: 2px;
 }
+.t-speak-error {
+  font-size: 12.5px;
+  color: #e0a37a;
+  margin: 4px 0 0;
+}
+
 .t-back-label {
   font-style: normal;
   font-size: 10.5px;
