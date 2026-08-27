@@ -1,0 +1,61 @@
+{
+  "expo": {
+    "name": "RU Spike",
+    "slug": "spike",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#10161a"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.rayyan.ruspike",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "The spike records short push-to-talk clips to test on-device speech recognition. Audio never leaves the device.",
+        "UIBackgroundModes": []
+      }
+    },
+    "android": {
+      "package": "com.rayyan.ruspike",
+      "adaptiveIcon": {
+        "backgroundColor": "#10161a",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.INTERNET"
+      ],
+      "blockedPermissions": [
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-sharing",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "15.1",
+            "useFrameworks": "static"
+          },
+          "android": {
+            "minSdkVersion": 24,
+            "compileSdkVersion": 35,
+            "targetSdkVersion": 35,
+            "extraMavenRepos": []
+          }
+        }
+      ]
+    ]
+  }
+}

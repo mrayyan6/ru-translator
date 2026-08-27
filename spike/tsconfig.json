@@ -1,0 +1,18 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "paths": {
+      // whisper.rn's package.json "exports" map defines only subpath patterns
+      // ("./*" and "./*/") and no root "." entry, so TypeScript cannot resolve
+      // a bare `import from 'whisper.rn'`. Metro resolves it fine via "main",
+      // so this is a types-only gap — point TS at the generated declarations
+      // rather than changing the import and diverging from the library's docs.
+      "whisper.rn": ["./node_modules/whisper.rn/lib/typescript/index.d.ts"],
+      // Platform-free logic shared with the PWA. Metro needs the matching
+      // watchFolders entry in metro.config.js to resolve this at runtime.
+      "@core/*": ["../core/*"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx", "src/types/*.d.ts", "../core/**/*.ts"]
+}
