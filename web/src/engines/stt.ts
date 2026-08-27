@@ -6,9 +6,25 @@ import { peakAmplitude } from '../audio';
 import { getTransformers } from '../transformersEnv';
 
 export const WHISPER_MODELS: Record<WhisperVariant, string> = {
+  tiny: 'onnx-community/whisper-tiny',
   base: 'onnx-community/whisper-base',
   small: 'onnx-community/whisper-small',
 };
+
+/**
+ * WASM is the default, not WebGPU, and that is deliberate.
+ *
+ * Measured on a Pixel-class Android: whisper-base at q8 on WebGPU took roughly
+ * two minutes for a six-second clip. Int8 operators are thinly supported on the
+ * WebGPU backend, so they fall back to CPU one operator at a time, paying a
+ * GPU-to-CPU copy on each — which is slower than never involving the GPU.
+ *
+ * q8 belongs with WASM. If WebGPU is ever worth using here it needs fp16 or
+ * fp32 weights, which is a different (and much larger) download, so it stays a
+ * measured choice in the diagnostics screen rather than a default.
+ */
+export type SttDevice = 'wasm' | 'webgpu';
+export const DEFAULT_STT_DEVICE: SttDevice = 'wasm';
 
 /**
  * Inference cannot actually be cancelled once it is inside WASM or WebGPU, but
@@ -59,7 +75,7 @@ export class WhisperWebRecognizer implements SpeechRecognizer {
   readonly id = 'whisper-transformers';
   private pipe: AutomaticSpeechRecognitionPipeline | null = null;
   private variant: WhisperVariant | null = null;
-  private device: 'webgpu' | 'wasm' = 'wasm';
+  private device: SttDevice = DEFAULT_STT_DEVICE;
   private dtype: string | null = null;
 
   get loadedVariant() {
@@ -95,11 +111,16 @@ export class WhisperWebRecognizer implements SpeechRecognizer {
    * saves a whole test cycle — which on a phone in another room is the more
    * expensive resource.
    */
-  private static readonly DTYPE_CANDIDATES = ['q8', 'fp32'] as const;
+  private static candidatesFor(device: SttDevice): string[] {
+    // q8 is the right choice on WASM and the wrong one on WebGPU, where int8
+    // operators fall back to CPU individually. Ask each backend for what it
+    // actually runs well.
+    return device === 'webgpu' ? ['fp32', 'q8'] : ['q8', 'fp32'];
+  }
 
   async load(
     variant: WhisperVariant,
-    device: 'webgpu' | 'wasm',
+    device: SttDevice,
     onProgress?: (p: SttLoadProgress) => void,
     /**
      * Called the moment an attempt fails, before the next one starts.
@@ -128,7 +149,7 @@ export class WhisperWebRecognizer implements SpeechRecognizer {
     const attempts: string[] = [];
     let lastError: unknown = null;
 
-    for (const dtype of WhisperWebRecognizer.DTYPE_CANDIDATES) {
+    for (const dtype of WhisperWebRecognizer.candidatesFor(device)) {
       try {
         this.pipe = (await createPipeline('automatic-speech-recognition', modelId, {
           device,

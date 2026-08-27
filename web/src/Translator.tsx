@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import type { Lang } from '@core/types';
 import { mt, recorder, tts, whisper } from './engines/singletons';
-import { detectWebGpu, setOfflineMode } from './transformersEnv';
+import { setOfflineMode } from './transformersEnv';
 import { MAX_RECORDING_MS } from './audio';
+import { getLastWarmUpMs, getSttDevice, getSttVariant, setLastWarmUpMs } from './settings';
 
 type InputMode = 'voice' | 'text';
 type OutputMode = 'voice' | 'text';
@@ -30,12 +31,19 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
   const [inputMode, setInputMode] = useState<InputMode>('voice');
   const [outputMode, setOutputMode] = useState<OutputMode>('voice');
   const [phase, setPhase] = useState<Phase>('idle');
-  const [statusLine, setStatusLine] = useState('Loading models…');
   const [error, setError] = useState<string | null>(null);
   const [turn, setTurn] = useState<Turn | null>(null);
   const [typed, setTyped] = useState('');
-  const [ready, setReady] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+
+  // Two readiness flags, not one. Typing needs only the translation model,
+  // which loads in seconds; speech needs Whisper, which does not. Gating the
+  // whole screen on the slowest of them is what produced a four-minute wait.
+  const [mtReady, setMtReady] = useState(false);
+  const [sttReady, setSttReady] = useState(false);
+  const [mtProgress, setMtProgress] = useState<number | null>(null);
+  const [sttProgress, setSttProgress] = useState<number | null>(null);
+  const [warmUpMs, setWarmUpMs] = useState<number | null>(getLastWarmUpMs());
 
   const recordingRef = useRef(false);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -44,39 +52,55 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
 
   useEffect(() => {
     let cancelled = false;
+
     (async () => {
       try {
-        setStatusLine('Preparing translation…');
-        await mt.load('en', 'ru');
-        await mt.load('ru', 'en');
+        // Stage 1 — the active direction only. Enough to type and translate.
+        await mt.load(from, to, (p) => !cancelled && setMtProgress(p.progress));
+        if (cancelled) return;
+        setMtProgress(null);
+        setMtReady(true);
+
+        tts.initialize().catch(() => undefined);
+
+        // Stage 2 — speech, in the background. The screen is already usable.
+        const device = getSttDevice();
+        const variant = getSttVariant();
+        await whisper.load(variant, device, (p) => !cancelled && setSttProgress(p.progress));
+        if (cancelled) return;
+        setSttProgress(null);
+        setSttReady(true);
+
+        // Stage 3 — the reverse direction, needed only for the meaning check.
+        await mt.load(to, from).catch(() => undefined);
         if (cancelled) return;
 
-        setStatusLine('Preparing speech recognition…');
-        const gpu = await detectWebGpu();
-        await whisper.load('base', gpu.available ? 'webgpu' : 'wasm');
-        if (cancelled) return;
-
-        setStatusLine('Warming up…');
-        await whisper.warmUp('en');
-        if (cancelled) return;
-
-        await tts.initialize();
-
-        // Everything is in memory now. Close the door: from here a missing file
-        // is an error, never a quiet fetch.
+        // Everything that can be loaded is loaded. Close the door: from here a
+        // missing file is an error, never a quiet fetch.
         setOfflineMode(true);
-        setReady(true);
-        setStatusLine('Ready — works with no connection');
+
+        // Stage 4 — warm-up last, and deliberately not awaited by anything the
+        // user is waiting on. It pays the one-off shader/kernel compilation so
+        // the first real utterance is not the slowest, but blocking startup on
+        // it bought nothing and cost minutes.
+        whisper
+          .warmUp('en')
+          .then((ms) => {
+            if (cancelled) return;
+            setWarmUpMs(ms);
+            setLastWarmUpMs(ms);
+          })
+          .catch(() => undefined);
       } catch (e: any) {
-        if (!cancelled) {
-          setError(e?.message ?? String(e));
-          setStatusLine('Setup failed');
-        }
+        if (!cancelled) setError(e?.message ?? String(e));
       }
     })();
+
     return () => {
       cancelled = true;
     };
+    // Runs once. Switching direction reuses already-loaded pipelines.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* ------------------------------------------------------------- the pipeline */
@@ -93,19 +117,26 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
       setError(null);
       const started = performance.now();
       try {
-        const rt = await mt.roundTrip(trimmed, from, to);
-        const result: Turn = {
+        // The forward direction is always loaded; the reverse may still be
+        // arriving, so the meaning check degrades rather than blocking.
+        const forward = await mt.translate(trimmed, from, to);
+        let back: string | null = null;
+        if (mt.isLoaded(to, from)) {
+          back = (await mt.translate(forward.text, to, from).catch(() => null))?.text ?? null;
+        }
+
+        setTurn({
           source: trimmed,
-          translation: rt.forward,
-          backTranslation: rt.back,
+          translation: forward.text,
+          backTranslation: back,
           from,
           to,
           ms: performance.now() - started,
-        };
-        setTurn(result);
+        });
         setPhase('ready');
+
         if (outputMode === 'voice') {
-          tts.speak(rt.forward, to).catch((e: any) =>
+          tts.speak(forward.text, to).catch((e: any) =>
             setError(`Could not speak it: ${e?.message ?? e}`)
           );
         }
@@ -118,7 +149,7 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
   );
 
   const startRecording = useCallback(async () => {
-    if (!ready || recordingRef.current) return;
+    if (!sttReady || recordingRef.current) return;
     recordingRef.current = true;
     setError(null);
     setTurn(null);
@@ -132,7 +163,7 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
       setPhase('error');
       setError(`Microphone unavailable: ${e?.message ?? e}`);
     }
-  }, [ready]);
+  }, [sttReady]);
 
   const stopAndTranslate = useCallback(async () => {
     if (!recordingRef.current) return;
@@ -173,17 +204,35 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
   const recSeconds = (elapsed / 1000).toFixed(1);
   const nearLimit = elapsed > MAX_RECORDING_MS - 3000;
 
+  const pill = sttReady
+    ? { text: '● Offline ready', cls: 'ok' }
+    : mtReady
+    ? { text: '◐ Typing ready · speech loading', cls: 'part' }
+    : { text: '○ Preparing', cls: '' };
+
+  const idleHint = sttReady
+    ? warmUpMs !== null
+      ? `Ready — works with no connection`
+      : 'Ready — works with no connection'
+    : mtReady
+    ? sttProgress !== null
+      ? `Speech model ${Math.round(sttProgress)}% — you can type in the meantime`
+      : 'Loading speech model — you can type in the meantime'
+    : mtProgress !== null
+    ? `Loading translation ${Math.round(mtProgress)}%`
+    : 'Loading translation…';
+
   /* ------------------------------------------------------------------- render */
 
   return (
     <div className="t-root">
       <header className="t-top">
         <motion.span
-          className={`t-pill ${ready ? 'ok' : ''}`}
-          animate={reduce ? undefined : { opacity: ready ? 1 : [0.45, 1, 0.45] }}
-          transition={{ duration: 1.6, repeat: ready ? 0 : Infinity }}
+          className={`t-pill ${pill.cls}`}
+          animate={reduce ? undefined : { opacity: sttReady ? 1 : [0.5, 1, 0.5] }}
+          transition={{ duration: 1.6, repeat: sttReady ? 0 : Infinity }}
         >
-          {ready ? '● Offline ready' : '○ Preparing'}
+          {pill.text}
         </motion.span>
         <button className="t-ghost" onClick={onOpenDiagnostics} aria-label="Open diagnostics">
           Diagnostics
@@ -251,7 +300,6 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
               exit={reduce ? undefined : { opacity: 0 }}
             >
               <motion.span
-                className="t-dot-row"
                 animate={reduce ? undefined : { opacity: [0.35, 1, 0.35] }}
                 transition={{ duration: 1.1, repeat: Infinity }}
               >
@@ -293,15 +341,24 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
           )}
 
           {!error && phase === 'idle' && (
-            <motion.p
+            <motion.div
               key="hint"
-              className="t-hint"
+              className="t-hint-wrap"
               initial={reduce ? false : { opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={reduce ? undefined : { opacity: 0 }}
             >
-              {ready ? statusLine : statusLine}
-            </motion.p>
+              <p className="t-hint">{idleHint}</p>
+              {(mtProgress !== null || sttProgress !== null) && (
+                <div className="t-bar" role="progressbar">
+                  <motion.div
+                    className="t-bar-fill"
+                    animate={{ width: `${Math.round(sttProgress ?? mtProgress ?? 0)}%` }}
+                    transition={{ duration: 0.3 }}
+                  />
+                </div>
+              )}
+            </motion.div>
           )}
         </AnimatePresence>
       </div>
@@ -316,7 +373,7 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
               onClick={() => setInputMode(m)}
               aria-pressed={inputMode === m}
             >
-              {m === 'voice' ? '🎤 Speak' : '⌨ Type'}
+              {m === 'voice' ? '🎤 Speak' : '⌨️ Type'}
             </button>
           ))}
         </fieldset>
@@ -329,7 +386,7 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
               onClick={() => setOutputMode(m)}
               aria-pressed={outputMode === m}
             >
-              {m === 'voice' ? '🔊 Speak' : '👁 Text only'}
+              {m === 'voice' ? '🔊 Speak' : '🔇 Text only'}
             </button>
           ))}
         </fieldset>
@@ -347,7 +404,7 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
           >
             <motion.button
               className={`t-mic ${phase === 'recording' ? 'rec' : ''}`}
-              disabled={!ready}
+              disabled={!sttReady}
               // Pointer capture keeps pointerup on this element even if the
               // finger slides off, which is what a held button needs. It also
               // removes the pointerleave hack that fired stop twice.
@@ -371,8 +428,10 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
               <MicIcon active={phase === 'recording'} />
             </motion.button>
             <p className={`t-mic-label ${nearLimit ? 'warn' : ''}`}>
-              {!ready
-                ? 'Preparing…'
+              {!sttReady
+                ? sttProgress !== null
+                  ? `Speech model ${Math.round(sttProgress)}%`
+                  : 'Preparing speech…'
                 : phase === 'recording'
                 ? `${recSeconds}s — release to translate`
                 : 'Hold to speak'}
@@ -397,11 +456,11 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
             />
             <motion.button
               className="t-translate"
-              disabled={!ready || typed.trim() === ''}
+              disabled={!mtReady || typed.trim() === ''}
               onClick={() => void translateText(typed)}
               whileTap={reduce ? undefined : { scale: 0.97 }}
             >
-              Translate
+              {mtReady ? 'Translate' : 'Loading translation…'}
             </motion.button>
           </motion.div>
         )}

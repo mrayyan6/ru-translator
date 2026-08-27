@@ -17,6 +17,8 @@ import { collectWebDeviceInfo, type WebDeviceInfo } from './device';
 import { mt, recorder, tts, webSpeech, whisper } from './engines/singletons';
 import { cachedBytes, clearModelCache } from './modelCache';
 import { clearSession, loadSession, saveSession } from './persist';
+import { getSttDevice, getSttVariant, setSttDevice, setSttVariant } from './settings';
+import type { SttDevice } from './engines/stt';
 import { formatBytes, getStorageStatus, requestPersistentStorage, type StorageStatus } from './storage';
 import { detectWebGpu, setOfflineMode, transformersDiagnostics } from './transformersEnv';
 
@@ -32,7 +34,9 @@ export default function App() {
   const [storage, setStorage] = useState<StorageStatus | null>(null);
   const [probe, setProbe] = useState<NetworkProbeResult | null>(restored.probe);
   const [pageLoads] = useState(() => restored.pageLoads + 1);
-  const [variant, setVariant] = useState<WhisperVariant>('base');
+  const [variant, setVariant] = useState<WhisperVariant>(getSttVariant);
+  // Named apart from `device` above, which holds the *device info* for the report.
+  const [sttDevice, setSttDeviceState] = useState<SttDevice>(getSttDevice);
   const [sttChoice, setSttChoice] = useState<SttEngineChoice>('auto');
   const [gpu, setGpu] = useState<{ available: boolean; reason: string } | null>(null);
   const [platformStt, setPlatformStt] = useState<{ available: boolean; reason: string } | null>(null);
@@ -179,7 +183,7 @@ export default function App() {
       }
 
       say(`Downloading Whisper ${variant}…`);
-      const device = gpu?.available ? 'webgpu' : 'wasm';
+      const device = getSttDevice();
       const load = await whisper.load(
         variant,
         device,
@@ -200,7 +204,7 @@ export default function App() {
 
   const loadWhisper = () =>
     guard('Load Whisper', async () => {
-      const dev = gpu?.available ? 'webgpu' : 'wasm';
+      const dev = getSttDevice();
       const load = await whisper.load(
         variant,
         dev,
@@ -242,6 +246,37 @@ export default function App() {
    * A ref rather than the `recording` state because pointerup and pointerleave
    * can both fire for one gesture, and React state has not updated between them.
    */
+  /**
+   * Three inferences on the same one-second clip.
+   *
+   * The first pays for shader and kernel compilation; the rest are steady
+   * state. Reporting them separately is the only way to tell "slow once" from
+   * "slow always", which decides whether the answer is a warm-up or a
+   * different model entirely.
+   */
+  const benchmarkStt = () =>
+    guard('Benchmark speech', async () => {
+      if (whisper.loadedVariant === null) throw new Error('Load the speech model first.');
+      const runs: number[] = [];
+      for (let i = 0; i < 3; i++) {
+        setProgress(`run ${i + 1} of 3`);
+        const ms = await whisper.warmUp('en');
+        runs.push(ms);
+        say(`  run ${i + 1}: ${Math.round(ms)}ms`);
+      }
+      const steady = runs.slice(1);
+      const avg = steady.reduce((a, b) => a + b, 0) / steady.length;
+      record(
+        'stt-benchmark',
+        'Speech benchmark (1s clip x3)',
+        'PASS',
+        avg,
+        `first=${Math.round(runs[0])}ms incl. compilation, steady=${steady
+          .map((m) => Math.round(m))
+          .join(' / ')}ms, device=${whisper.activeDevice}, dtype=${whisper.activeDtype}`
+      );
+    });
+
   const startRecording = useCallback(async () => {
     if (recordingRef.current) return;
     recordingRef.current = true;
@@ -549,12 +584,39 @@ export default function App() {
         <h2>2 · Setup (needs Wi-Fi, once)</h2>
         <button onClick={enablePersistence} disabled={!!busy}>Request persistent storage</button>
         <div className="row">
-          {(['base', 'small'] as WhisperVariant[]).map((v) => (
-            <button key={v} className={variant === v ? 'sel' : ''} onClick={() => setVariant(v)} disabled={!!busy}>
+          {(['tiny', 'base', 'small'] as WhisperVariant[]).map((v) => (
+            <button
+              key={v}
+              className={variant === v ? 'sel' : ''}
+              onClick={() => {
+                setVariant(v);
+                setSttVariant(v);
+              }}
+              disabled={!!busy}
+            >
               whisper {v}
             </button>
           ))}
         </div>
+        <div className="row">
+          {(['wasm', 'webgpu'] as SttDevice[]).map((d) => (
+            <button
+              key={d}
+              className={sttDevice === d ? 'sel' : ''}
+              onClick={() => {
+                setSttDeviceState(d);
+                setSttDevice(d);
+              }}
+              disabled={!!busy}
+            >
+              {d}
+            </button>
+          ))}
+        </div>
+        <code>
+          Changing model or backend needs a reload before it takes effect — the loaded session
+          stays in memory until then.
+        </code>
         <button onClick={downloadModels} disabled={!!busy}>Download all models</button>
         <button onClick={armOffline} disabled={!!busy}>Arm offline mode</button>
         <button onClick={wipeModels} disabled={!!busy}>Delete cached models</button>
@@ -571,6 +633,7 @@ export default function App() {
           ))}
         </div>
         <button onClick={loadWhisper} disabled={!!busy}>Load Whisper {variant}</button>
+        <button onClick={benchmarkStt} disabled={!!busy}>Benchmark speech model</button>
         <div className="row">
           <button onClick={() => setUtterance(EN_UTTERANCES[0])} disabled={!!busy}>EN set</button>
           <button onClick={() => setUtterance(RU_UTTERANCES[0])} disabled={!!busy}>RU set</button>

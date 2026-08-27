@@ -34,7 +34,7 @@ export interface DeviceInfo {
   appVersion: string;
 }
 
-export type WhisperVariant = 'small' | 'base';
+export type WhisperVariant = 'tiny' | 'base' | 'small';
 
 export interface SttOutcome {
   text: string;
