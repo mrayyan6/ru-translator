@@ -19,6 +19,7 @@ import { cachedBytes, clearModelCache } from './modelCache';
 import { clearSession, loadSession, saveSession } from './persist';
 import { getSttDevice, getSttVariant, setSttDevice, setSttVariant } from './settings';
 import type { SttDevice } from './engines/stt';
+import { forceUpdate } from './updateApp';
 import { formatBytes, getStorageStatus, requestPersistentStorage, type StorageStatus } from './storage';
 import { detectWebGpu, setOfflineMode, transformersDiagnostics } from './transformersEnv';
 
@@ -620,7 +621,11 @@ export default function App() {
         <button onClick={downloadModels} disabled={!!busy}>Download all models</button>
         <button onClick={armOffline} disabled={!!busy}>Arm offline mode</button>
         <button onClick={wipeModels} disabled={!!busy}>Delete cached models</button>
+        <button onClick={() => void forceUpdate()} disabled={!!busy}>
+          Force fresh app download (keeps models)
+        </button>
         <code>cache: {formatBytes(cacheSize)}</code>
+        <code>build {__BUILD_ID__}</code>
       </section>
 
       <section>

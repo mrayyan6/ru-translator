@@ -18,3 +18,27 @@
 # Consequence to be aware of: with COEP require-corp, every cross-origin
 # subresource must opt in via CORP/CORS. That is fine here because after setup
 # the app loads nothing cross-origin at all.
+
+# ---------------------------------------------------------------------------
+# The three files that decide whether an update is ever seen.
+#
+# An installed PWA serves its shell from the service worker's precache. The
+# browser only notices a new build when it re-fetches sw.js and finds it
+# changed — and if sw.js itself is served from the HTTP cache, that never
+# happens. The app then stays frozen on an old build no matter how many times
+# it is force-closed and reopened, which is exactly what went wrong here.
+#
+# These rules keep the entry points uncacheable. The hashed assets they point
+# at stay cacheable, so this costs almost nothing.
+
+/sw.js
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/registerSW.js
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/index.html
+  Cache-Control: no-cache
+
+/manifest.webmanifest
+  Cache-Control: no-cache

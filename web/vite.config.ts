@@ -31,13 +31,29 @@ const crossOriginIsolation = {
   },
 };
 
+/**
+ * Stamped into the bundle so the running build is identifiable at a glance.
+ * Without it there is no way to tell a stale service worker from a real bug,
+ * and we spent a round trip finding that out.
+ */
+const BUILD_ID = new Date()
+  .toISOString()
+  .replace('T', ' ')
+  .replace(/\..+$/, '')
+  .slice(5); // MM-DD HH:MM:SS
+
 export default defineConfig({
+  define: {
+    __BUILD_ID__: JSON.stringify(BUILD_ID),
+  },
   plugins: [
     react(),
     crossOriginIsolation,
     VitePWA({
       registerType: 'autoUpdate',
-      injectRegister: 'auto',
+      // Registered by hand in main.tsx so we can poll for updates rather than
+      // relying on the browser noticing one on its own.
+      injectRegister: false,
       manifest: {
         name: 'Offline RU Translator',
         short_name: 'RU Translator',

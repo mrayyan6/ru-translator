@@ -1,5 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { registerSW } from 'virtual:pwa-register';
 import { installJsNetworkCounter } from '@core/netprobe';
 import Shell from './Shell';
 import './index.css';
@@ -15,9 +16,35 @@ import './index.css';
  *
  * transformers.js is deliberately NOT touched here. It is dynamic-imported on
  * first use (see transformersEnv.ts) so that it gets its own chunk — importing
- * it eagerly is what caused the initialisation crash.
+ * it eagerly is what caused an earlier initialisation crash.
  */
 installJsNetworkCounter();
+
+/**
+ * Service worker registration, done by hand rather than by the plugin's
+ * generated snippet.
+ *
+ * An installed PWA serves its shell from precache, so a new deploy is only
+ * picked up when the browser re-fetches sw.js and sees it change. Left to
+ * itself that check is unreliable enough that the app can stay frozen on an
+ * old build through repeated force-closes — which is what happened.
+ *
+ * Two things fix it: `_headers` makes sw.js uncacheable, and this asks the
+ * registration to check for a new version on an interval and whenever the app
+ * comes back to the foreground.
+ */
+registerSW({
+  immediate: true,
+  onRegisteredSW(_swUrl, registration) {
+    if (!registration) return;
+
+    const check = () => registration.update().catch(() => undefined);
+    setInterval(check, 60_000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') check();
+    });
+  },
+});
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

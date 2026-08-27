@@ -4,7 +4,21 @@ import type { Lang } from '@core/types';
 import { mt, recorder, tts, whisper } from './engines/singletons';
 import { setOfflineMode } from './transformersEnv';
 import { MAX_RECORDING_MS } from './audio';
-import { getLastWarmUpMs, getSttDevice, getSttVariant, setLastWarmUpMs } from './settings';
+import {
+  getLastWarmUpMs,
+  getSttDevice,
+  getSttVariant,
+  setLastWarmUpMs,
+  setSttVariant,
+} from './settings';
+import { forceUpdate } from './updateApp';
+
+/**
+ * Above this, a one-second clip is taking long enough that real sentences will
+ * be unusable, and the honest move is to offer a smaller model rather than let
+ * someone discover it in a train station.
+ */
+const SLOW_WARMUP_MS = 8000;
 
 type InputMode = 'voice' | 'text';
 type OutputMode = 'voice' | 'text';
@@ -203,6 +217,8 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
 
   const recSeconds = (elapsed / 1000).toFixed(1);
   const nearLimit = elapsed > MAX_RECORDING_MS - 3000;
+  const slowSpeech =
+    warmUpMs !== null && warmUpMs > SLOW_WARMUP_MS && getSttVariant() !== 'tiny';
 
   const pill = sttReady
     ? { text: '● Offline ready', cls: 'ok' }
@@ -212,7 +228,9 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
 
   const idleHint = sttReady
     ? warmUpMs !== null
-      ? `Ready — works with no connection`
+      ? `Ready — works with no connection · ${whisper.activeDevice}/${whisper.activeDtype}, ${(
+          warmUpMs / 1000
+        ).toFixed(1)}s per second of audio`
       : 'Ready — works with no connection'
     : mtReady
     ? sttProgress !== null
@@ -234,10 +252,45 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
         >
           {pill.text}
         </motion.span>
-        <button className="t-ghost" onClick={onOpenDiagnostics} aria-label="Open diagnostics">
-          Diagnostics
-        </button>
+        <div className="t-top-right">
+          <button className="t-ghost" onClick={onOpenDiagnostics} aria-label="Open diagnostics">
+            Diagnostics
+          </button>
+          {/* The running build, visible at a glance. A stale service worker and
+              a real bug look identical without this. */}
+          <button
+            className="t-build"
+            onClick={() => void forceUpdate()}
+            title="Tap to force a fresh download of the app"
+          >
+            build {__BUILD_ID__} · refresh
+          </button>
+        </div>
       </header>
+
+      <AnimatePresence>
+        {slowSpeech && (
+          <motion.div
+            className="t-slow"
+            initial={reduce ? false : { opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={reduce ? undefined : { opacity: 0, height: 0 }}
+          >
+            <span>
+              Speech is slow on this phone — {(warmUpMs! / 1000).toFixed(1)}s for a one-second
+              clip on <code>{whisper.activeDevice}</code>.
+            </span>
+            <button
+              onClick={() => {
+                setSttVariant('tiny');
+                void forceUpdate();
+              }}
+            >
+              Switch to the faster model
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <button className="t-direction" onClick={swap} aria-label="Swap language direction">
         <AnimatePresence mode="popLayout" initial={false}>
