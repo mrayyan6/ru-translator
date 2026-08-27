@@ -1,0 +1,433 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import type { Lang } from '@core/types';
+import { mt, recorder, tts, whisper } from './engines/singletons';
+import { detectWebGpu, setOfflineMode } from './transformersEnv';
+import { MAX_RECORDING_MS } from './audio';
+
+type InputMode = 'voice' | 'text';
+type OutputMode = 'voice' | 'text';
+type Phase = 'idle' | 'recording' | 'thinking' | 'ready' | 'error';
+
+const LABEL: Record<Lang, string> = { en: 'English', ru: 'Русский' };
+const FLAG: Record<Lang, string> = { en: '🇬🇧', ru: '🇷🇺' };
+
+interface Turn {
+  source: string;
+  translation: string;
+  backTranslation: string | null;
+  from: Lang;
+  to: Lang;
+  ms: number;
+}
+
+export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: () => void }) {
+  const reduce = useReducedMotion();
+
+  const [from, setFrom] = useState<Lang>('en');
+  const to: Lang = from === 'en' ? 'ru' : 'en';
+
+  const [inputMode, setInputMode] = useState<InputMode>('voice');
+  const [outputMode, setOutputMode] = useState<OutputMode>('voice');
+  const [phase, setPhase] = useState<Phase>('idle');
+  const [statusLine, setStatusLine] = useState('Loading models…');
+  const [error, setError] = useState<string | null>(null);
+  const [turn, setTurn] = useState<Turn | null>(null);
+  const [typed, setTyped] = useState('');
+  const [ready, setReady] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+
+  const recordingRef = useRef(false);
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  /* ------------------------------------------------------------ model setup */
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setStatusLine('Preparing translation…');
+        await mt.load('en', 'ru');
+        await mt.load('ru', 'en');
+        if (cancelled) return;
+
+        setStatusLine('Preparing speech recognition…');
+        const gpu = await detectWebGpu();
+        await whisper.load('base', gpu.available ? 'webgpu' : 'wasm');
+        if (cancelled) return;
+
+        setStatusLine('Warming up…');
+        await whisper.warmUp('en');
+        if (cancelled) return;
+
+        await tts.initialize();
+
+        // Everything is in memory now. Close the door: from here a missing file
+        // is an error, never a quiet fetch.
+        setOfflineMode(true);
+        setReady(true);
+        setStatusLine('Ready — works with no connection');
+      } catch (e: any) {
+        if (!cancelled) {
+          setError(e?.message ?? String(e));
+          setStatusLine('Setup failed');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /* ------------------------------------------------------------- the pipeline */
+
+  const translateText = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) {
+        setError('Nothing to translate.');
+        setPhase('error');
+        return;
+      }
+      setPhase('thinking');
+      setError(null);
+      const started = performance.now();
+      try {
+        const rt = await mt.roundTrip(trimmed, from, to);
+        const result: Turn = {
+          source: trimmed,
+          translation: rt.forward,
+          backTranslation: rt.back,
+          from,
+          to,
+          ms: performance.now() - started,
+        };
+        setTurn(result);
+        setPhase('ready');
+        if (outputMode === 'voice') {
+          tts.speak(rt.forward, to).catch((e: any) =>
+            setError(`Could not speak it: ${e?.message ?? e}`)
+          );
+        }
+      } catch (e: any) {
+        setError(e?.message ?? String(e));
+        setPhase('error');
+      }
+    },
+    [from, to, outputMode]
+  );
+
+  const startRecording = useCallback(async () => {
+    if (!ready || recordingRef.current) return;
+    recordingRef.current = true;
+    setError(null);
+    setTurn(null);
+    setPhase('recording');
+    setElapsed(0);
+    tickRef.current = setInterval(() => setElapsed((e) => e + 100), 100);
+    try {
+      await recorder.start();
+    } catch (e: any) {
+      recordingRef.current = false;
+      setPhase('error');
+      setError(`Microphone unavailable: ${e?.message ?? e}`);
+    }
+  }, [ready]);
+
+  const stopAndTranslate = useCallback(async () => {
+    if (!recordingRef.current) return;
+    recordingRef.current = false;
+    if (tickRef.current) clearInterval(tickRef.current);
+    tickRef.current = null;
+    setPhase('thinking');
+
+    try {
+      const rec = await recorder.stop();
+      const res = await whisper.transcribe(rec.samples, from);
+      if (res.outcome.rejected) {
+        setPhase('error');
+        setError(`Didn't catch that — ${res.outcome.rejectReason}. Try again, a little closer.`);
+        return;
+      }
+      await translateText(res.outcome.text);
+    } catch (e: any) {
+      setPhase('error');
+      setError(e?.message ?? String(e));
+    }
+  }, [from, translateText]);
+
+  const replay = useCallback(() => {
+    if (turn) tts.speak(turn.translation, turn.to).catch(() => undefined);
+  }, [turn]);
+
+  const swap = useCallback(() => {
+    setFrom((f) => (f === 'en' ? 'ru' : 'en'));
+    setTurn(null);
+    setTyped('');
+    setError(null);
+    setPhase('idle');
+  }, []);
+
+  useEffect(() => () => void (tickRef.current && clearInterval(tickRef.current)), []);
+
+  const recSeconds = (elapsed / 1000).toFixed(1);
+  const nearLimit = elapsed > MAX_RECORDING_MS - 3000;
+
+  /* ------------------------------------------------------------------- render */
+
+  return (
+    <div className="t-root">
+      <header className="t-top">
+        <motion.span
+          className={`t-pill ${ready ? 'ok' : ''}`}
+          animate={reduce ? undefined : { opacity: ready ? 1 : [0.45, 1, 0.45] }}
+          transition={{ duration: 1.6, repeat: ready ? 0 : Infinity }}
+        >
+          {ready ? '● Offline ready' : '○ Preparing'}
+        </motion.span>
+        <button className="t-ghost" onClick={onOpenDiagnostics} aria-label="Open diagnostics">
+          Diagnostics
+        </button>
+      </header>
+
+      <button className="t-direction" onClick={swap} aria-label="Swap language direction">
+        <AnimatePresence mode="popLayout" initial={false}>
+          <motion.span
+            key={from}
+            className="t-dir-lang"
+            initial={reduce ? false : { y: 14, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={reduce ? undefined : { y: -14, opacity: 0 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 32 }}
+          >
+            {FLAG[from]} {LABEL[from]}
+          </motion.span>
+        </AnimatePresence>
+        <motion.span
+          className="t-swap"
+          key={`arrow-${from}`}
+          initial={reduce ? false : { rotate: -180 }}
+          animate={{ rotate: 0 }}
+          transition={{ type: 'spring', stiffness: 260, damping: 22 }}
+          aria-hidden="true"
+        >
+          ⇄
+        </motion.span>
+        <AnimatePresence mode="popLayout" initial={false}>
+          <motion.span
+            key={to}
+            className="t-dir-lang"
+            initial={reduce ? false : { y: -14, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={reduce ? undefined : { y: 14, opacity: 0 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 32 }}
+          >
+            {FLAG[to]} {LABEL[to]}
+          </motion.span>
+        </AnimatePresence>
+      </button>
+
+      <div className="t-stage">
+        <AnimatePresence mode="wait">
+          {error && (
+            <motion.p
+              key="error"
+              className="t-error"
+              initial={reduce ? false : { opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={reduce ? undefined : { opacity: 0 }}
+              transition={{ duration: 0.2 }}
+            >
+              {error}
+            </motion.p>
+          )}
+
+          {!error && phase === 'thinking' && (
+            <motion.div
+              key="thinking"
+              className="t-thinking"
+              initial={reduce ? false : { opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={reduce ? undefined : { opacity: 0 }}
+            >
+              <motion.span
+                className="t-dot-row"
+                animate={reduce ? undefined : { opacity: [0.35, 1, 0.35] }}
+                transition={{ duration: 1.1, repeat: Infinity }}
+              >
+                Translating…
+              </motion.span>
+            </motion.div>
+          )}
+
+          {!error && phase === 'ready' && turn && (
+            <motion.div
+              key="result"
+              className="t-result"
+              initial={reduce ? false : { opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={reduce ? undefined : { opacity: 0, y: -8 }}
+              transition={{ type: 'spring', stiffness: 320, damping: 30 }}
+            >
+              <p className="t-source">{turn.source}</p>
+              <p className="t-translation" lang={turn.to}>
+                {turn.translation}
+              </p>
+              {turn.backTranslation && (
+                <p className="t-back">
+                  <span className="t-back-label">meaning check</span>
+                  {turn.backTranslation}
+                </p>
+              )}
+              <div className="t-result-actions">
+                <motion.button
+                  className="t-speak"
+                  onClick={replay}
+                  whileTap={reduce ? undefined : { scale: 0.96 }}
+                >
+                  🔊 Play again
+                </motion.button>
+                <span className="t-timing">{Math.round(turn.ms)} ms</span>
+              </div>
+            </motion.div>
+          )}
+
+          {!error && phase === 'idle' && (
+            <motion.p
+              key="hint"
+              className="t-hint"
+              initial={reduce ? false : { opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={reduce ? undefined : { opacity: 0 }}
+            >
+              {ready ? statusLine : statusLine}
+            </motion.p>
+          )}
+        </AnimatePresence>
+      </div>
+
+      <div className="t-modes">
+        <fieldset className="t-mode-group">
+          <legend>Input</legend>
+          {(['voice', 'text'] as InputMode[]).map((m) => (
+            <button
+              key={m}
+              className={inputMode === m ? 'sel' : ''}
+              onClick={() => setInputMode(m)}
+              aria-pressed={inputMode === m}
+            >
+              {m === 'voice' ? '🎤 Speak' : '⌨ Type'}
+            </button>
+          ))}
+        </fieldset>
+        <fieldset className="t-mode-group">
+          <legend>Output</legend>
+          {(['voice', 'text'] as OutputMode[]).map((m) => (
+            <button
+              key={m}
+              className={outputMode === m ? 'sel' : ''}
+              onClick={() => setOutputMode(m)}
+              aria-pressed={outputMode === m}
+            >
+              {m === 'voice' ? '🔊 Speak' : '👁 Text only'}
+            </button>
+          ))}
+        </fieldset>
+      </div>
+
+      <AnimatePresence mode="wait" initial={false}>
+        {inputMode === 'voice' ? (
+          <motion.div
+            key="voice-input"
+            className="t-input"
+            initial={reduce ? false : { opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={reduce ? undefined : { opacity: 0, y: -12 }}
+            transition={{ duration: 0.18 }}
+          >
+            <motion.button
+              className={`t-mic ${phase === 'recording' ? 'rec' : ''}`}
+              disabled={!ready}
+              // Pointer capture keeps pointerup on this element even if the
+              // finger slides off, which is what a held button needs. It also
+              // removes the pointerleave hack that fired stop twice.
+              onPointerDown={(e) => {
+                e.currentTarget.setPointerCapture(e.pointerId);
+                void startRecording();
+              }}
+              onPointerUp={() => void stopAndTranslate()}
+              onPointerCancel={() => void stopAndTranslate()}
+              whileTap={reduce ? undefined : { scale: 0.95 }}
+              aria-label={phase === 'recording' ? 'Release to translate' : 'Hold to speak'}
+            >
+              {phase === 'recording' && !reduce && (
+                <motion.span
+                  className="t-mic-ring"
+                  aria-hidden="true"
+                  animate={{ scale: [1, 1.35], opacity: [0.55, 0] }}
+                  transition={{ duration: 1.4, repeat: Infinity, ease: 'easeOut' }}
+                />
+              )}
+              <MicIcon active={phase === 'recording'} />
+            </motion.button>
+            <p className={`t-mic-label ${nearLimit ? 'warn' : ''}`}>
+              {!ready
+                ? 'Preparing…'
+                : phase === 'recording'
+                ? `${recSeconds}s — release to translate`
+                : 'Hold to speak'}
+            </p>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="text-input"
+            className="t-input"
+            initial={reduce ? false : { opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={reduce ? undefined : { opacity: 0, y: -12 }}
+            transition={{ duration: 0.18 }}
+          >
+            <textarea
+              className="t-textarea"
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              placeholder={from === 'en' ? 'Type in English…' : 'Введите текст…'}
+              lang={from}
+              rows={3}
+            />
+            <motion.button
+              className="t-translate"
+              disabled={!ready || typed.trim() === ''}
+              onClick={() => void translateText(typed)}
+              whileTap={reduce ? undefined : { scale: 0.97 }}
+            >
+              Translate
+            </motion.button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function MicIcon({ active }: { active: boolean }) {
+  return (
+    <svg
+      className="t-mic-svg"
+      viewBox="0 0 24 24"
+      width="42"
+      height="42"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="9" y="2" width="6" height="12" rx="3" fill={active ? 'currentColor' : 'none'} />
+      <path d="M5 11a7 7 0 0 0 14 0" />
+      <line x1="12" y1="18" x2="12" y2="22" />
+      <line x1="8" y1="22" x2="16" y2="22" />
+    </svg>
+  );
+}
