@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import type { Lang } from '@core/types';
+import type { Lang, WhisperVariant } from '@core/types';
 import { mt, recorder, tts, whisper } from './engines/singletons';
 import { setOfflineMode, withDownloadsAllowed } from './transformersEnv';
 import { MAX_RECORDING_MS } from './audio';
@@ -13,6 +13,7 @@ import {
 } from './settings';
 import { forceUpdate } from './updateApp';
 import { buildLabel } from './buildInfo';
+import { logEvent } from './eventLog';
 
 /**
  * Above this, a one-second clip is taking long enough that real sentences will
@@ -60,6 +61,7 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
   const [mtProgress, setMtProgress] = useState<number | null>(null);
   const [sttProgress, setSttProgress] = useState<number | null>(null);
   const [warmUpMs, setWarmUpMs] = useState<number | null>(getLastWarmUpMs());
+  const activeVariant = getSttVariant();
 
   const recordingRef = useRef(false);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -199,6 +201,23 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
     try {
       const rec = await recorder.stop();
       const res = await whisper.transcribe(rec.samples, from);
+
+      /**
+       * Every transcription is recorded with the conditions that produced it.
+       *
+       * Speech was reported as good online and poor offline, which no code path
+       * explains — the translator only ever calls Whisper, and Whisper never
+       * touches the network once loaded. The likelier explanation is that the
+       * two runs used different models. Without this line there is no way to
+       * tell those apart afterwards, so it goes in the log and the report.
+       */
+      logEvent(
+        `STT ${from} · model=${getSttVariant()} · ${whisper.activeDevice}/${whisper.activeDtype} · ` +
+          `audio=${Math.round(rec.durationMs)}ms · online=${navigator.onLine} · ` +
+          `${res.outcome.rejected ? `REJECTED (${res.outcome.rejectReason})` : `"${res.outcome.text}"`} · ` +
+          `${Math.round(res.sttMs)}ms`
+      );
+
       if (res.outcome.rejected) {
         setPhase('error');
         setError(`Didn't catch that — ${res.outcome.rejectReason}. Try again, a little closer.`);
@@ -568,6 +587,34 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
           </motion.div>
         )}
       </AnimatePresence>
+
+      <footer className="t-footer">
+        <span className="t-footer-label">Speech model</span>
+        <div className="t-footer-models">
+          {(['tiny', 'base'] as WhisperVariant[]).map((v) => (
+            <button
+              key={v}
+              className={activeVariant === v ? 'sel' : ''}
+              onClick={() => {
+                if (activeVariant === v) return;
+                setSttVariant(v);
+                // The old model is already in memory; a reload is the simplest
+                // honest way to swap it. Downloaded files stay in IndexedDB.
+                location.reload();
+              }}
+            >
+              {v}
+              {v === 'tiny' ? ' · 39 MB' : ' · 73 MB'}
+            </button>
+          ))}
+        </div>
+        <p className="t-footer-note">
+          {activeVariant === 'tiny'
+            ? 'Tiny is fast but weak at Russian — it often returns only a word or two. Use base if Russian matters.'
+            : 'Base is markedly better at Russian than tiny, and slower.'}
+          {sttReady ? ` Running on ${whisper.activeDevice}/${whisper.activeDtype}.` : ''}
+        </p>
+      </footer>
     </div>
   );
 }

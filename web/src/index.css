@@ -259,6 +259,29 @@ code.log { font-size: 11px; }
   flex-direction: column;
   gap: 2px;
 }
+.t-footer {
+  border-top: 1px solid #22323b;
+  padding-top: 14px;
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.t-footer-label {
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.t-footer-models { display: flex; gap: 8px; }
+.t-footer-models button {
+  flex: 1;
+  padding: 9px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.t-footer-note { font-size: 11.5px; color: var(--muted); margin: 0; line-height: 1.5; }
+
 .t-speak-error {
   font-size: 12.5px;
   color: #e0a37a;

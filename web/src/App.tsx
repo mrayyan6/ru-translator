@@ -17,6 +17,7 @@ import { collectWebDeviceInfo, type WebDeviceInfo } from './device';
 import { mt, recorder, tts, webSpeech, whisper } from './engines/singletons';
 import { cachedBytes, clearModelCache } from './modelCache';
 import { clearSession, loadSession, saveSession } from './persist';
+import { clearLog, getLog, logEvent, primeLog, subscribeLog } from './eventLog';
 import { getSttDevice, getSttVariant, setSttDevice, setSttVariant } from './settings';
 import type { SttDevice } from './engines/stt';
 import { forceUpdate } from './updateApp';
@@ -34,6 +35,7 @@ const APP_VERSION = 'web-spike-0.1.0';
 
 /** Read once per page load, so a tab that was killed comes back with its evidence. */
 const restored = loadSession();
+primeLog(restored.log);
 
 type SttEngineChoice = 'auto' | 'whisper' | 'platform';
 
@@ -52,7 +54,7 @@ export default function App() {
   const [results, setResults] = useState<TestResult[]>(restored.results);
   const [timings, setTimings] = useState<Record<string, StageTiming>>(restored.timings);
   const [voices, setVoices] = useState<VoiceInfo[]>(restored.voices);
-  const [log, setLog] = useState<string[]>(restored.log);
+  const [log, setLog] = useState<string[]>(getLog);
   const [busy, setBusy] = useState<string | null>(null);
   const [progress, setProgress] = useState<string>('');
   const [recording, setRecording] = useState(false);
@@ -68,9 +70,10 @@ export default function App() {
   const recordingRef = useRef(false);
   const offlineVerified = probe?.offline ?? false;
 
-  const say = useCallback((line: string) => {
-    setLog((l) => [`${new Date().toLocaleTimeString()}  ${line}`, ...l].slice(0, 200));
-  }, []);
+  // The shared log, so anything the translator screen records lands here and in
+  // the exported report too.
+  useEffect(() => subscribeLog(setLog), []);
+  const say = useCallback((line: string) => logEvent(line), []);
 
   const refreshEnvironment = useCallback(async () => {
     setDevice(await collectWebDeviceInfo(APP_VERSION));
@@ -732,7 +735,7 @@ export default function App() {
             clearSession();
             setResults([]);
             setTimings({});
-            setLog([]);
+            clearLog();
             say('Stored session cleared. Reload to reset the page-load counter.');
           }}
           disabled={!!busy}
