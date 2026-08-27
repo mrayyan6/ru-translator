@@ -26,9 +26,28 @@ and the report records it, so a bad deploy shows up as a number rather than a my
 
 ```powershell
 cd "d:\Russia Language\web"
-npm run build
-npx --yes wrangler pages deploy dist --project-name ru-translator
+npm run deploy
 ```
+
+**Always use `npm run deploy`, never a bare `wrangler pages deploy`.**
+
+The script passes `--branch production`, and that flag is load-bearing. This
+project's production branch is named `production`, but once the folder became a
+git repository wrangler started inferring the branch from git — `main` — and
+Cloudflare treats any branch that is not the production branch as a *preview*.
+The result is a deploy that reports success, returns a working URL, and leaves
+`ru-translator.pages.dev` frozen on an older build. It cost a full debugging
+round to find, because every symptom pointed at browser caching instead.
+
+To check what production is actually serving:
+
+```powershell
+(Invoke-WebRequest https://ru-translator.pages.dev/ -UseBasicParsing).Content `
+  -match 'assets/index-[A-Za-z0-9\-]+\.js'; $Matches[0]
+```
+
+Compare that against the filename in `dist/index.html`. If they differ, the
+deploy did not land on production.
 
 The first run opens a browser to create a free Cloudflare account. After that it prints an
 HTTPS URL. Alternatively, drag the `dist` folder onto the Cloudflare Pages dashboard.
