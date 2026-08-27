@@ -1,0 +1,326 @@
+:root {
+  --bg: #10161a;
+  --panel: #18232a;
+  --ink: #e8eef2;
+  --muted: #8ba3b0;
+  --accent: #8fd4b4;
+  --btn: #22323b;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { margin: 0; min-height: 100%; background: var(--bg); }
+
+body {
+  color: var(--ink);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Stops iOS zooming and rubber-banding while the mic button is held down. */
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior: none;
+}
+
+main {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: max(16px, env(safe-area-inset-top)) 16px calc(48px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+h1 { font-size: 24px; margin: 8px 0 0; }
+h2 { font-size: 15px; color: var(--accent); margin: 0 0 4px; }
+
+section {
+  background: var(--panel);
+  border-radius: 6px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.banner { border-radius: 6px; padding: 12px; font-weight: 700; }
+.banner.ok { background: #123d2e; }
+.banner.warn { background: #4a2016; }
+
+.busy {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #2b3a44;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+button {
+  background: var(--btn);
+  color: var(--ink);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 12px 14px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+}
+button:disabled { opacity: 0.45; cursor: default; }
+button.sel { border-color: var(--accent); color: var(--accent); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+.row > button { flex: 1 1 auto; }
+
+button.utt {
+  text-align: left;
+  font-weight: 400;
+  font-size: 14px;
+  padding: 8px 10px;
+  background: transparent;
+}
+
+button.ptt {
+  padding: 28px;
+  font-size: 17px;
+  background: #1d4d3a;
+  margin-top: 8px;
+  /* Without this, holding the button pans the page on touch devices. */
+  touch-action: none;
+  user-select: none;
+}
+button.ptt.rec { background: #a33a26; }
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  color: var(--muted);
+  word-break: break-word;
+}
+code.log { font-size: 11px; }
+
+.result { font-size: 18px; margin: 6px 0 0; }
+.back { font-size: 13px; color: var(--muted); font-style: italic; margin: 0; }
+.hint { font-size: 12px; color: var(--muted); font-style: italic; margin: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+
+/* ============================================================ translator view */
+
+.t-root {
+  max-width: 560px;
+  margin: 0 auto;
+  min-height: 100dvh;
+  padding: max(12px, env(safe-area-inset-top)) 18px calc(24px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.t-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+.t-pill {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #2a2016;
+  color: #d8a353;
+}
+.t-pill.ok { background: #123d2e; color: #8fd4b4; }
+
+.t-ghost {
+  background: none;
+  border: 1px solid #2c3c45;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 7px 12px;
+  border-radius: 999px;
+}
+
+.t-back-btn {
+  display: block;
+  margin: 12px auto 0;
+  background: var(--btn);
+  color: var(--ink);
+  border: none;
+  border-radius: 999px;
+  padding: 10px 18px;
+  font-weight: 600;
+}
+
+/* direction ------------------------------------------------------------- */
+
+.t-direction {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  width: 100%;
+  background: var(--panel);
+  border: none;
+  border-radius: 14px;
+  padding: 18px 14px;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 600;
+}
+.t-dir-lang { white-space: nowrap; }
+.t-swap { display: inline-block; color: var(--accent); font-size: 20px; }
+
+/* stage ----------------------------------------------------------------- */
+
+.t-stage {
+  flex: 1 1 auto;
+  min-height: 190px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.t-hint, .t-thinking { color: var(--muted); font-size: 14.5px; margin: 0; }
+.t-error {
+  color: #f0a58f;
+  background: #3a1d16;
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+
+.t-result { width: 100%; display: flex; flex-direction: column; gap: 10px; }
+.t-source { color: var(--muted); font-size: 15px; margin: 0; }
+.t-translation {
+  /* Large on purpose: this is the line held up for a stranger to read. */
+  font-size: clamp(24px, 6.5vw, 34px);
+  line-height: 1.25;
+  font-weight: 600;
+  margin: 0;
+  text-wrap: balance;
+}
+.t-back {
+  font-size: 13px;
+  color: var(--muted);
+  font-style: italic;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.t-back-label {
+  font-style: normal;
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: #5f7683;
+}
+
+.t-result-actions { display: flex; align-items: center; justify-content: center; gap: 12px; }
+.t-speak {
+  background: var(--btn);
+  border: none;
+  border-radius: 999px;
+  color: var(--ink);
+  font-weight: 600;
+  padding: 11px 20px;
+}
+.t-timing { font-size: 11.5px; color: #5f7683; font-variant-numeric: tabular-nums; }
+
+/* modes ------------------------------------------------------------------ */
+
+.t-modes { display: flex; gap: 10px; }
+.t-mode-group {
+  flex: 1;
+  border: 1px solid #223039;
+  border-radius: 12px;
+  padding: 8px 8px 10px;
+  margin: 0;
+  display: flex;
+  gap: 6px;
+}
+.t-mode-group legend {
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: #5f7683;
+  padding: 0 6px;
+}
+.t-mode-group button {
+  flex: 1;
+  font-size: 12.5px;
+  padding: 9px 4px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+}
+.t-mode-group button.sel {
+  background: #1d2f38;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* input ------------------------------------------------------------------ */
+
+.t-input { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+
+.t-mic {
+  position: relative;
+  width: 104px;
+  height: 104px;
+  border-radius: 50%;
+  border: none;
+  background: #1d4d3a;
+  color: #eafaf2;
+  display: grid;
+  place-items: center;
+  /* Without this a held button pans the page on touch devices. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.t-mic.rec { background: #a33a26; }
+.t-mic:disabled { opacity: 0.4; }
+.t-mic-svg { position: relative; z-index: 1; }
+
+.t-mic-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: #a33a26;
+}
+
+.t-mic-label { margin: 0; font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.t-mic-label.warn { color: #d8a353; }
+
+.t-textarea {
+  width: 100%;
+  background: var(--panel);
+  border: 1px solid #223039;
+  border-radius: 12px;
+  color: var(--ink);
+  /* 16px minimum, otherwise iOS zooms the page when the field is focused. */
+  font: inherit;
+  font-size: 16px;
+  padding: 14px;
+  resize: vertical;
+}
+.t-textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.t-translate {
+  width: 100%;
+  background: #1d4d3a;
+  color: #eafaf2;
+  border: none;
+  border-radius: 12px;
+  padding: 16px;
+  font-size: 16px;
+  font-weight: 700;
+}
+.t-translate:disabled { opacity: 0.4; }

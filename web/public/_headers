@@ -1,0 +1,20 @@
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  Cross-Origin-Resource-Policy: same-origin
+
+# Why these three headers exist
+#
+# Together they put the page in a cross-origin isolated context, which is the
+# precondition for SharedArrayBuffer and therefore for multi-threaded WASM.
+# Without them onnxruntime-web runs single-threaded and speech recognition is
+# several times slower — the difference between usable and unusable on iOS,
+# where WebGPU is still behind a Safari feature flag and WASM is all we have.
+#
+# This file is read by Cloudflare Pages and Netlify. GitHub Pages ignores it
+# and offers no way to set headers at all, which is the reason this project
+# does not deploy there.
+#
+# Consequence to be aware of: with COEP require-corp, every cross-origin
+# subresource must opt in via CORP/CORS. That is fine here because after setup
+# the app loads nothing cross-origin at all.
