@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+build/
+web/dev-dist/
+*.tsbuildinfo
+
+# Native build artefacts (Expo prebuild regenerates these)
+spike/android/
+spike/ios/
+spike/.expo/
+*.apk
+*.aab
+*.ipa
+*.keystore
+
+# ML model files — these are downloaded, never committed.
+# Whisper base alone is ~80 MB and GitHub rejects blobs over 100 MB.
+*.bin
+*.onnx
+*.gguf
+*.mlmodelc/
+spike/assets/models/
+
+# Phase 0 reports contain device details; keep them out of the repo by default
+phase0-*.md
+phase0-*.json
+
+# Editor and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Env and secrets
+.env
+.env.*
+!.env.example
+.wrangler/
+
+# Claude Code local settings
+.claude/settings.local.json
