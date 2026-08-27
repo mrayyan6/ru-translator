@@ -20,6 +20,8 @@ import { clearSession, loadSession, saveSession } from './persist';
 import { getSttDevice, getSttVariant, setSttDevice, setSttVariant } from './settings';
 import type { SttDevice } from './engines/stt';
 import { forceUpdate } from './updateApp';
+import { buildLabelLong } from './buildInfo';
+import { clearPartials, partialBytes } from './resumableFetch';
 import { formatBytes, getStorageStatus, requestPersistentStorage, type StorageStatus } from './storage';
 import { detectWebGpu, setOfflineMode, transformersDiagnostics } from './transformersEnv';
 
@@ -55,6 +57,7 @@ export default function App() {
   const [translation, setTranslation] = useState('');
   const [backTranslation, setBackTranslation] = useState('');
   const [cacheSize, setCacheSize] = useState<number>(0);
+  const [partialSize, setPartialSize] = useState<number>(0);
 
   const lastSamples = useRef<Float32Array | null>(null);
   const recordingRef = useRef(false);
@@ -68,6 +71,7 @@ export default function App() {
     setDevice(await collectWebDeviceInfo(APP_VERSION));
     setStorage(await getStorageStatus());
     setCacheSize(await cachedBytes());
+    setPartialSize(await partialBytes());
   }, []);
 
   // Persist after every meaningful change, so a tab kill cannot take the
@@ -526,8 +530,9 @@ export default function App() {
   const wipeModels = () =>
     guard('Delete models', async () => {
       await clearModelCache();
+      await clearPartials();
       await refreshEnvironment();
-      say('Model cache cleared.');
+      say('Model cache and any partial downloads cleared.');
     });
 
   const summary = useMemo(() => summarise(results), [results]);
@@ -625,7 +630,11 @@ export default function App() {
           Force fresh app download (keeps models)
         </button>
         <code>cache: {formatBytes(cacheSize)}</code>
-        <code>build {__BUILD_ID__}</code>
+        <code>
+          partial downloads held for resume: {formatBytes(partialSize)}
+          {partialSize > 0 ? ' — an interrupted download will continue from here' : ''}
+        </code>
+        <code>build {buildLabelLong()}</code>
       </section>
 
       <section>

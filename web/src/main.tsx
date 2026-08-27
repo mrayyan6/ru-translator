@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
 import { installJsNetworkCounter } from '@core/netprobe';
+import { installResumableFetch } from './resumableFetch';
 import Shell from './Shell';
 import './index.css';
 
@@ -19,6 +20,16 @@ import './index.css';
  * it eagerly is what caused an earlier initialisation crash.
  */
 installJsNetworkCounter();
+
+/**
+ * Then make model downloads resumable. Order matters: the counter wraps the
+ * real fetch, and this wraps the counter, so counted requests stay counted.
+ *
+ * On a slow or flaky connection a plain fetch of a 49 MB model never finishes —
+ * every drop restarts from zero and nothing is kept. This stores 4 MB pieces as
+ * they land so a retry continues instead of starting over.
+ */
+installResumableFetch();
 
 /**
  * Service worker registration, done by hand rather than by the plugin's

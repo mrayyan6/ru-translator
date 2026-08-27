@@ -33,18 +33,18 @@ const crossOriginIsolation = {
 
 /**
  * Stamped into the bundle so the running build is identifiable at a glance.
- * Without it there is no way to tell a stale service worker from a real bug,
- * and we spent a round trip finding that out.
+ * Without it there is no way to tell a stale service worker from a real bug.
+ *
+ * Stored as an epoch timestamp rather than a formatted string so the UI can
+ * render it in the viewer's own timezone. A UTC string on a phone in Pakistan
+ * is five hours out, which makes "is this the build I just deployed?" harder
+ * to answer, not easier.
  */
-const BUILD_ID = new Date()
-  .toISOString()
-  .replace('T', ' ')
-  .replace(/\..+$/, '')
-  .slice(5); // MM-DD HH:MM:SS
+const BUILD_TIME = Date.now();
 
 export default defineConfig({
   define: {
-    __BUILD_ID__: JSON.stringify(BUILD_ID),
+    __BUILD_TIME__: JSON.stringify(BUILD_TIME),
   },
   plugins: [
     react(),

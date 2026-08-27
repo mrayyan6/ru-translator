@@ -2,6 +2,7 @@ import type { TranslationPipeline } from '@huggingface/transformers';
 import type { Lang } from '@core/types';
 import { hasCachedModel } from '../modelCache';
 import { getTransformers } from '../transformersEnv';
+import { isNetworkError, retryOnNetworkError } from '../netErrors';
 
 /**
  * Bilingual OPUS-MT models, one per direction.
@@ -106,7 +107,18 @@ export class WebTranslationEngine {
             }
           },
         };
-        const pipe = (await createPipeline('translation', modelId, options)) as TranslationPipeline;
+        const pipe = (await retryOnNetworkError(
+          () => createPipeline('translation', modelId, options),
+          {
+            onRetry: (attempt, delay, err) =>
+              onAttempt?.(
+                `${modelId} ${dtype}: network failed (${String((err as any)?.message ?? err).slice(
+                  0,
+                  120
+                )}) — retry ${attempt} in ${delay / 1000}s`
+              ),
+          }
+        )) as TranslationPipeline;
 
         attempts.push(`${dtype}: ok`);
         this.pipelines.set(key, pipe);
@@ -117,6 +129,15 @@ export class WebTranslationEngine {
         attempts.push(`${dtype}: FAILED (${message})`);
         onAttempt?.(`${modelId} ${dtype} FAILED: ${message}`);
         lastError = e;
+
+        // Never escalate a download failure to a larger download. The fallback
+        // is for "this quantisation will not run here", not "the network died".
+        if (isNetworkError(e)) {
+          throw new Error(
+            `Could not download ${modelId}: ${message}. This is a network problem, not a model ` +
+              `problem — reconnect and try again. Files already downloaded are kept.`
+          );
+        }
       }
     }
 

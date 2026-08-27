@@ -4,6 +4,7 @@ import { applyGate } from '@core/hallucination';
 import { hasCachedModel } from '../modelCache';
 import { peakAmplitude } from '../audio';
 import { getTransformers } from '../transformersEnv';
+import { isNetworkError, retryOnNetworkError } from '../netErrors';
 
 export const WHISPER_MODELS: Record<WhisperVariant, string> = {
   tiny: 'onnx-community/whisper-tiny',
@@ -151,20 +152,32 @@ export class WhisperWebRecognizer implements SpeechRecognizer {
 
     for (const dtype of WhisperWebRecognizer.candidatesFor(device)) {
       try {
-        this.pipe = (await createPipeline('automatic-speech-recognition', modelId, {
-          device,
-          dtype,
-          progress_callback: (data: any) => {
-            if (data?.status === 'progress') {
-              onProgress?.({
-                file: `${dtype} ${data.file ?? ''}`,
-                progress: data.progress ?? 0,
-                loaded: data.loaded ?? 0,
-                total: data.total ?? 0,
-              });
-            }
-          },
-        })) as AutomaticSpeechRecognitionPipeline;
+        this.pipe = (await retryOnNetworkError(
+          () =>
+            createPipeline('automatic-speech-recognition', modelId, {
+              device,
+              dtype,
+              progress_callback: (data: any) => {
+                if (data?.status === 'progress') {
+                  onProgress?.({
+                    file: `${dtype} ${data.file ?? ''}`,
+                    progress: data.progress ?? 0,
+                    loaded: data.loaded ?? 0,
+                    total: data.total ?? 0,
+                  });
+                }
+              },
+            }),
+          {
+            onRetry: (attempt, delay, err) =>
+              onAttempt?.(
+                `Whisper ${dtype}: network failed (${String((err as any)?.message ?? err).slice(
+                  0,
+                  120
+                )}) — retry ${attempt} in ${delay / 1000}s`
+              ),
+          }
+        )) as AutomaticSpeechRecognitionPipeline;
 
         attempts.push(`${dtype}: ok`);
         this.variant = variant;
@@ -176,6 +189,15 @@ export class WhisperWebRecognizer implements SpeechRecognizer {
         attempts.push(`${dtype}: FAILED (${message})`);
         onAttempt?.(`Whisper ${dtype} FAILED: ${message}`);
         lastError = e;
+
+        // Same rule as translation: a download failure must not escalate to a
+        // larger download.
+        if (isNetworkError(e)) {
+          throw new Error(
+            `Could not download ${modelId}: ${message}. This is a network problem, not a model ` +
+              `problem — reconnect and try again. Files already downloaded are kept.`
+          );
+        }
       }
     }
 

@@ -12,6 +12,7 @@ import {
   setSttVariant,
 } from './settings';
 import { forceUpdate } from './updateApp';
+import { buildLabel } from './buildInfo';
 
 /**
  * Above this, a one-second clip is taking long enough that real sentences will
@@ -85,15 +86,15 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
         setSttProgress(null);
         setSttReady(true);
 
-        // Stage 3 — the reverse direction, needed only for the meaning check.
-        await mt.load(to, from).catch(() => undefined);
-        if (cancelled) return;
-
-        // Everything that can be loaded is loaded. Close the door: from here a
-        // missing file is an error, never a quiet fetch.
+        // The reverse direction is NOT loaded here. It is another ~75 MB, and
+        // on a slow connection it doubled the wait for something only needed
+        // after the user switches direction. It loads on demand instead.
+        //
+        // Everything needed to translate is present, so close the door: from
+        // here a missing file is an error, never a quiet fetch.
         setOfflineMode(true);
 
-        // Stage 4 — warm-up last, and deliberately not awaited by anything the
+        // Stage 3 — warm-up last, and deliberately not awaited by anything the
         // user is waiting on. It pays the one-off shader/kernel compilation so
         // the first real utterance is not the slowest, but blocking startup on
         // it bought nothing and cost minutes.
@@ -205,13 +206,43 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
     if (turn) tts.speak(turn.translation, turn.to).catch(() => undefined);
   }, [turn]);
 
+  /**
+   * Load a direction on demand.
+   *
+   * Remote loading is re-enabled only for the duration of an explicitly
+   * requested download and switched straight back off, so the "no silent
+   * fetch" guarantee survives while a genuine one-time download can still
+   * happen when someone asks for it.
+   */
+  const ensureDirection = useCallback(async (f: Lang, t: Lang) => {
+    if (mt.isLoaded(f, t)) return;
+    setOfflineMode(false);
+    try {
+      await mt.load(f, t, (p) => setMtProgress(p.progress));
+    } finally {
+      setMtProgress(null);
+      setOfflineMode(true);
+    }
+  }, []);
+
   const swap = useCallback(() => {
-    setFrom((f) => (f === 'en' ? 'ru' : 'en'));
+    const nextFrom: Lang = from === 'en' ? 'ru' : 'en';
+    const nextTo: Lang = nextFrom === 'en' ? 'ru' : 'en';
+    setFrom(nextFrom);
     setTurn(null);
     setTyped('');
     setError(null);
     setPhase('idle');
-  }, []);
+
+    if (!mt.isLoaded(nextFrom, nextTo)) {
+      ensureDirection(nextFrom, nextTo).catch((e: any) =>
+        setError(
+          `${LABEL[nextFrom]} → ${LABEL[nextTo]} needs a one-time download and it did not ` +
+            `complete: ${e?.message ?? e}`
+        )
+      );
+    }
+  }, [from, ensureDirection]);
 
   useEffect(() => () => void (tickRef.current && clearInterval(tickRef.current)), []);
 
@@ -263,7 +294,7 @@ export default function Translator({ onOpenDiagnostics }: { onOpenDiagnostics: (
             onClick={() => void forceUpdate()}
             title="Tap to force a fresh download of the app"
           >
-            build {__BUILD_ID__} · refresh
+            build {buildLabel()} · refresh
           </button>
         </div>
       </header>

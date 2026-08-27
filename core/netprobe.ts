@@ -34,7 +34,12 @@ const TARGETS = [
   },
 ];
 
-const TIMEOUT_MS = 4000;
+/**
+ * Generous on purpose. At 4 seconds a genuinely slow-but-working connection
+ * reported one target as unreachable, which is a false negative in the one
+ * direction that matters — probes failing is how we conclude "offline".
+ */
+const TIMEOUT_MS = 8000;
 
 async function probeOne(target: { name: string; url: string }) {
   const started = Date.now();
